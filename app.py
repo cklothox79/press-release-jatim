@@ -1,7 +1,7 @@
 # ==========================================================
 # app.py
 # TAFFWARR Fusion — Press Release Otomatis Cuaca Ekstrem Jawa Timur
-# Versi 2.1 — dengan Auto Data, ECMWF, Atmosfer, Histogram, dan Peta Interaktif
+# Versi 2.2 — Tanpa Radar, dengan Dinamika Atmosfer (Global–Regional–Lokal)
 # ==========================================================
 
 import streamlit as st
@@ -12,8 +12,8 @@ from datetime import datetime
 import textwrap
 import os
 import matplotlib.pyplot as plt
-import geopandas as gpd
 import plotly.express as px
+import requests
 
 # === MODULES ===
 from modules.atmosphere_scraper import scrape_all as scrape_atmosphere
@@ -24,7 +24,7 @@ st.set_page_config(page_title="TAFFWARR Fusion — Press Release Jatim", layout=
 st.title("🌩️ TAFFWARR Fusion — Press Release Otomatis (Jawa Timur)")
 st.markdown(
     "Aplikasi ini menghasilkan *press release* kewaspadaan cuaca ekstrem di Jawa Timur "
-    "berdasarkan data TAFFWARR Fusion, radar Juanda, dinamika atmosfer global, dan model ECMWF (Open-Meteo)."
+    "berdasarkan data TAFFWARR Fusion, dinamika atmosfer global, regional, dan lokal (ECMWF/Open-Meteo)."
 )
 
 # === SIDEBAR ===
@@ -36,20 +36,17 @@ high_thr = st.sidebar.slider("Ambang Potensi Tinggi (%)", 50, 90, 70)
 low_thr = st.sidebar.slider("Ambang Potensi Rendah (%)", 10, 50, 40)
 auto_seed_toggle = st.sidebar.checkbox("Gunakan seed harian untuk auto-data", value=True)
 
-# === DINAMIKA ATMOSFER & ECMWF ===
+# === FETCH DATA ATMOSFER ===
 st.sidebar.markdown("---")
-st.sidebar.subheader("🌏 Dinamika Atmosfer")
+st.sidebar.subheader("🌍 Dinamika Atmosfer (Realtime)")
 atmo = scrape_atmosphere()
-st.sidebar.json(atmo)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🌐 Data ECMWF (Open-Meteo)")
 ecmwf = fetch_ecmwf_summary()
+st.sidebar.success("Data atmosfer berhasil diperbarui.")
+st.sidebar.json(atmo)
 st.sidebar.json(ecmwf)
 
-# === DATA FUSION (UPLOAD / AUTO) ===
+# === DATA FUSION ===
 st.markdown("## 📥 Data Probabilitas Cuaca Ekstrem (TAFFWARR Fusion)")
-
 uploaded = st.file_uploader("Unggah CSV (kolom: wilayah, probabilitas)", type=["csv"])
 os.makedirs("data", exist_ok=True)
 auto_path = "data/fusion_auto.csv"
@@ -103,7 +100,7 @@ df["kategori"] = pd.cut(
     include_lowest=True
 )
 
-# === TABEL RINGKASAN ===
+# === TABEL DAN VISUALISASI ===
 col1, col2 = st.columns([1.2, 1])
 with col1:
     st.subheader("📋 Tabel Probabilitas per Wilayah")
@@ -111,7 +108,7 @@ with col1:
     st.markdown("### Statistik Ringkasan")
     st.write(df["probabilitas"].describe())
 
-    # === HISTOGRAM DISTRIBUSI ===
+    # Histogram distribusi
     st.markdown("### 📈 Distribusi Probabilitas Cuaca Ekstrem")
     fig, ax = plt.subplots(figsize=(6, 3))
     ax.hist(df["probabilitas"], bins=10, color="#1f77b4", edgecolor='black', alpha=0.8)
@@ -121,45 +118,34 @@ with col1:
     st.pyplot(fig)
 
 with col2:
-    st.subheader("🛰️ Radar BMKG Juanda (Live)")
-    radar_url = "https://stamet-juanda.bmkg.go.id/radar/data/composite_latest.png"
-    st.image(radar_url, caption="Citra Reflektivitas Komposit (Juanda, update otomatis)", use_column_width=True)
-    st.markdown("---")
-    st.subheader("🗺️ Peta Potensi Cuaca Ekstrem (Choropleth)")
+    st.subheader("🌬️ Ringkasan Dinamika Atmosfer")
 
-    geojson_url = "https://raw.githubusercontent.com/superpikar/indonesia-geojson/main/jawa_timur.geojson"
-    try:
-        gdf = gpd.read_file(geojson_url)
-        merged = gdf.merge(df, left_on="WADMKC", right_on="wilayah", how="left")
-        color_map = {"Tinggi": "red", "Sedang": "orange", "Rendah": "green"}
-        merged["warna"] = merged["kategori"].map(color_map)
-        figmap = px.choropleth_mapbox(
-            merged,
-            geojson=merged.geometry.__geo_interface__,
-            locations=merged.index,
-            color="kategori",
-            color_discrete_map=color_map,
-            hover_name="wilayah",
-            hover_data=["probabilitas"],
-            mapbox_style="carto-positron",
-            zoom=6.5,
-            center={"lat": -7.5, "lon": 112.0},
-            opacity=0.7
-        )
-        st.plotly_chart(figmap, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Gagal memuat peta Jawa Timur: {e}")
+    # === GLOBAL ===
+    st.markdown("#### 🌍 **Global (MJO, Kelvin, OLR)**")
+    mjo_phase = atmo.get("phase", "?")
+    mjo_amp = atmo.get("amplitude", "?")
+    kelvin_active = atmo.get("kelvin_active", False)
+    olr_text = atmo.get("olr_anomaly", "tidak tersedia")
+
+    st.markdown(f"""
+    - **MJO:** fase {mjo_phase}, amplitudo {mjo_amp}  
+    - **Kelvin Wave:** {'aktif melintasi Indonesia' if kelvin_active else 'tidak signifikan'}  
+    - **OLR:** {olr_text}
+    """)
+
+    # === REGIONAL ===
+    st.markdown("#### 🌏 **Regional (Suhu Muka Laut / SST)**")
+    sst_text = atmo.get("sst_desc", "Data SST tidak tersedia.")
+    st.markdown(f"- {sst_text}")
+
+    # === LOKAL ===
+    st.markdown("#### 🌦️ **Lokal (ECMWF / Open-Meteo)**")
+    ecmwf_desc = ecmwf.get("desc", "Data tidak tersedia.")
+    st.markdown(f"- {ecmwf_desc}")
 
 # === PRESS RELEASE ===
 st.markdown("---")
 st.subheader("📰 Draft Press Release Otomatis")
-
-mjo_phase = atmo.get("phase", "?")
-mjo_amp = atmo.get("amplitude", "?")
-kelvin_active = atmo.get("kelvin_active", False)
-olr_text = atmo.get("olr_anomaly", "")
-sst_text = atmo.get("sst_desc", "")
-ecmwf_desc = ecmwf.get("desc", "")
 
 intro = (
     f"Hampir seluruh wilayah Jawa Timur telah memasuki musim hujan. "
@@ -219,7 +205,9 @@ BMKG Stasiun Meteorologi Juanda
 
 st.code(textwrap.dedent(release), language="markdown")
 
-st.download_button("⬇️ Unduh Press Release (.txt)", release.encode("utf-8"), file_name=f"press_release_jatim_{tanggal}.txt", mime="text/plain")
-st.download_button("⬇️ Unduh Data (.csv)", df.to_csv(index=False).encode("utf-8"), file_name=f"probabilitas_jatim_{tanggal}.csv", mime="text/csv")
+st.download_button("⬇️ Unduh Press Release (.txt)", release.encode("utf-8"),
+                   file_name=f"press_release_jatim_{tanggal}.txt", mime="text/plain")
+st.download_button("⬇️ Unduh Data (.csv)", df.to_csv(index=False).encode("utf-8"),
+                   file_name=f"probabilitas_jatim_{tanggal}.csv", mime="text/csv")
 
-st.success("✅ Selesai — press release dan visualisasi siap digunakan.")
+st.success("✅ Selesai — press release dan dinamika atmosfer siap digunakan.")
