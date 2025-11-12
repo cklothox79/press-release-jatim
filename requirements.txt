@@ -4,3 +4,6 @@ numpy
 requests
 beautifulsoup4
 python-docx
+matplotlib
+plotly
+geopandas
