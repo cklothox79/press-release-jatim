@@ -1,57 +1,58 @@
+# ==========================================================
 # app.py
-# TAFFWARR Fusion - Streamlit Press Release Generator (Jawa Timur)
-# - Auto-generate fusion data jika tidak ada upload (seed based on day of year)
-# - Integrasi: atmosphere_scraper (MJO/Kelvin/OLR/SST) + ecmwf_fetcher (Open-Meteo/ECMWF)
-# - Live radar image dari BMKG Juanda
+# TAFFWARR Fusion — Press Release Otomatis Cuaca Ekstrem Jawa Timur
+# Versi 2.1 — dengan Auto Data, ECMWF, Atmosfer, Histogram, dan Peta Interaktif
+# ==========================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import random
 from datetime import datetime
-from io import BytesIO
 import textwrap
 import os
+import matplotlib.pyplot as plt
+import geopandas as gpd
+import plotly.express as px
 
-# modules
+# === MODULES ===
 from modules.atmosphere_scraper import scrape_all as scrape_atmosphere
 from modules.ecmwf_fetcher import fetch_ecmwf_summary
 
-# --- Page config ---
+# === PAGE CONFIG ===
 st.set_page_config(page_title="TAFFWARR Fusion — Press Release Jatim", layout="wide")
 st.title("🌩️ TAFFWARR Fusion — Press Release Otomatis (Jawa Timur)")
-st.markdown("Sistem otomatis untuk menghasilkan press release kewaspadaan cuaca ekstrem di Jawa Timur. "
-            "Menggabungkan keluaran Fusion, radar Juanda, MJO/Kelvin/OLR/SST, dan data ECMWF (Open-Meteo).")
+st.markdown(
+    "Aplikasi ini menghasilkan *press release* kewaspadaan cuaca ekstrem di Jawa Timur "
+    "berdasarkan data TAFFWARR Fusion, radar Juanda, dinamika atmosfer global, dan model ECMWF (Open-Meteo)."
+)
 
-# --- Sidebar: settings ---
-st.sidebar.header("⚙️ Pengaturan")
-periode = st.sidebar.text_input("Periode (contoh: 13–19 November 2025)", value="13–19 November 2025")
+# === SIDEBAR ===
+st.sidebar.header("⚙️ Pengaturan Umum")
+periode = st.sidebar.text_input("Periode", value="13–19 November 2025")
 tanggal = st.sidebar.date_input("Tanggal Terbit", value=datetime.utcnow().date())
 nomor = st.sidebar.text_input("Nomor Naskah", value="PR-BMKG-JD/001/2025")
 high_thr = st.sidebar.slider("Ambang Potensi Tinggi (%)", 50, 90, 70)
 low_thr = st.sidebar.slider("Ambang Potensi Rendah (%)", 10, 50, 40)
-auto_seed_toggle = st.sidebar.checkbox("Gunakan seed harian untuk auto-data (bonus)", value=True)
+auto_seed_toggle = st.sidebar.checkbox("Gunakan seed harian untuk auto-data", value=True)
+
+# === DINAMIKA ATMOSFER & ECMWF ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("🌏 Dinamika Atmosfer")
+atmo = scrape_atmosphere()
+st.sidebar.json(atmo)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🌏 Dinamika Atmosfer Saat Ini")
-with st.spinner("Mengambil data dinamika atmosfer..."):
-    atmo = scrape_atmosphere()
-    st.sidebar.json(atmo)
+st.sidebar.subheader("🌐 Data ECMWF (Open-Meteo)")
+ecmwf = fetch_ecmwf_summary()
+st.sidebar.json(ecmwf)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🌐 Data ECMWF (Open-Meteo / ECMWF)")
-with st.spinner("Mengambil ringkasan ECMWF/Open-Meteo..."):
-    ecmwf = fetch_ecmwf_summary()
-    st.sidebar.json(ecmwf)
+# === DATA FUSION (UPLOAD / AUTO) ===
+st.markdown("## 📥 Data Probabilitas Cuaca Ekstrem (TAFFWARR Fusion)")
 
-# --- Data input: upload or auto-generate ---
-st.markdown("## 📥 Data TAFFWARR Fusion (probabilitas per kabupaten/kota)")
-uploaded = st.file_uploader("Unggah file CSV hasil Fusion (kolom minimal: wilayah, probabilitas)", type=["csv"])
-
-# path for auto-save
+uploaded = st.file_uploader("Unggah CSV (kolom: wilayah, probabilitas)", type=["csv"])
 os.makedirs("data", exist_ok=True)
 auto_path = "data/fusion_auto.csv"
-sample_path = "data/fusion_sample.csv"
 
 def generate_auto_data(seed=None):
     wilayah_jatim = [
@@ -78,118 +79,132 @@ def generate_auto_data(seed=None):
     return df_auto, seed
 
 if uploaded:
-    try:
-        df = pd.read_csv(uploaded)
-        st.success("File CSV berhasil dimuat dari unggahan.")
-    except Exception as e:
-        st.error(f"Gagal membaca CSV: {e}")
-        df = None
+    df = pd.read_csv(uploaded)
+    st.success("File CSV berhasil dimuat.")
 else:
-    # prefer auto saved if exists and is recent; else regenerate
-    seed = None
-    if auto_seed_toggle:
-        seed = datetime.now().timetuple().tm_yday
+    seed = datetime.now().timetuple().tm_yday if auto_seed_toggle else None
     if os.path.exists(auto_path):
-        try:
-            df = pd.read_csv(auto_path)
-            st.info(f"Memuat data otomatis dari `{auto_path}` ({len(df)} wilayah).")
-        except:
-            df, seed = generate_auto_data(seed)
-            st.success(f"Data otomatis baru dibuat (seed {seed}) — file disimpan di `{auto_path}`.")
+        df = pd.read_csv(auto_path)
+        st.info(f"Memuat data otomatis dari `{auto_path}` ({len(df)} wilayah).")
     else:
         df, seed = generate_auto_data(seed)
-        st.success(f"Data otomatis dibuat untuk {len(df)} wilayah (seed {seed}). File disimpan di `{auto_path}`.")
+        st.success(f"Data otomatis dibuat untuk {len(df)} wilayah (seed {seed}).")
 
-# validate
-if df is None or "wilayah" not in df.columns or "probabilitas" not in df.columns:
-    st.error("Data harus memiliki kolom 'wilayah' dan 'probabilitas'. Perbaiki file atau gunakan auto-data.")
+# === VALIDASI ===
+if "wilayah" not in df.columns or "probabilitas" not in df.columns:
+    st.error("Data harus memiliki kolom 'wilayah' dan 'probabilitas'.")
     st.stop()
 
-# normalize
-df["probabilitas"] = pd.to_numeric(df["probabilitas"], errors="coerce").fillna(0).clip(0,100)
-df["wilayah"] = df["wilayah"].astype(str)
+df["probabilitas"] = pd.to_numeric(df["probabilitas"], errors="coerce").fillna(0).clip(0, 100)
+df["kategori"] = pd.cut(
+    df["probabilitas"],
+    bins=[0, low_thr, high_thr, 100],
+    labels=["Rendah", "Sedang", "Tinggi"],
+    include_lowest=True
+)
 
-# classify
-def classify(p):
-    if p >= high_thr:
-        return "Tinggi"
-    if p >= low_thr:
-        return "Sedang"
-    return "Rendah"
-
-df["kategori"] = df["probabilitas"].apply(classify)
-df = df.sort_values("probabilitas", ascending=False).reset_index(drop=True)
-
-# --- Main layout: table + radar + press release ---
+# === TABEL RINGKASAN ===
 col1, col2 = st.columns([1.2, 1])
 with col1:
-    st.subheader("Tabel Ringkasan Probabilitas")
-    st.dataframe(df.style.format({"probabilitas":"{:.1f}"}), height=420)
-    st.markdown("### Statistik ringkasan")
+    st.subheader("📋 Tabel Probabilitas per Wilayah")
+    st.dataframe(df.style.format({"probabilitas": "{:.1f}"}), height=420)
+    st.markdown("### Statistik Ringkasan")
     st.write(df["probabilitas"].describe())
+
+    # === HISTOGRAM DISTRIBUSI ===
+    st.markdown("### 📈 Distribusi Probabilitas Cuaca Ekstrem")
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.hist(df["probabilitas"], bins=10, color="#1f77b4", edgecolor='black', alpha=0.8)
+    ax.set_xlabel("Probabilitas (%)")
+    ax.set_ylabel("Jumlah Wilayah")
+    ax.set_title("Distribusi Potensi Cuaca Ekstrem Jawa Timur")
+    st.pyplot(fig)
 
 with col2:
     st.subheader("🛰️ Radar BMKG Juanda (Live)")
     radar_url = "https://stamet-juanda.bmkg.go.id/radar/data/composite_latest.png"
-    try:
-        st.image(radar_url, caption="Citra Reflektivitas Komposit (WOFI Juanda) — terbaru", use_column_width=True)
-    except:
-        st.warning("Tidak dapat memuat radar Juanda saat ini.")
+    st.image(radar_url, caption="Citra Reflektivitas Komposit (Juanda, update otomatis)", use_column_width=True)
     st.markdown("---")
-    st.subheader("Informasi Dinamika & ECMWF")
-    st.markdown("**Dinamika Atmosfer**")
-    st.write(atmo)
-    st.markdown("**Ringkasan ECMWF / Open-Meteo**")
-    st.write(ecmwf)
+    st.subheader("🗺️ Peta Potensi Cuaca Ekstrem (Choropleth)")
 
+    geojson_url = "https://raw.githubusercontent.com/superpikar/jatim-geojson/main/jatim_kabkota.geojson"
+    try:
+        gdf = gpd.read_file(geojson_url)
+        merged = gdf.merge(df, left_on="WADMKC", right_on="wilayah", how="left")
+        color_map = {"Tinggi": "red", "Sedang": "orange", "Rendah": "green"}
+        merged["warna"] = merged["kategori"].map(color_map)
+        figmap = px.choropleth_mapbox(
+            merged,
+            geojson=merged.geometry.__geo_interface__,
+            locations=merged.index,
+            color="kategori",
+            color_discrete_map=color_map,
+            hover_name="wilayah",
+            hover_data=["probabilitas"],
+            mapbox_style="carto-positron",
+            zoom=6.5,
+            center={"lat": -7.5, "lon": 112.0},
+            opacity=0.7
+        )
+        st.plotly_chart(figmap, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Gagal memuat peta Jawa Timur: {e}")
+
+# === PRESS RELEASE ===
 st.markdown("---")
-st.subheader("📰 Preview — Press Release Otomatis")
+st.subheader("📰 Draft Press Release Otomatis")
 
-# build narrative
 mjo_phase = atmo.get("phase", "?")
-mjo_amp = atmo.get("amplitude", atmo.get("amp", "?"))
-kelvin_active = bool(atmo.get("kelvin_active", False))
+mjo_amp = atmo.get("amplitude", "?")
+kelvin_active = atmo.get("kelvin_active", False)
 olr_text = atmo.get("olr_anomaly", "")
 sst_text = atmo.get("sst_desc", "")
 ecmwf_desc = ecmwf.get("desc", "")
 
-intro = (f"Hampir seluruh wilayah Jawa Timur telah memasuki musim hujan. Berdasarkan hasil analisis TAFFWARR Fusion per {tanggal}, "
-         "terindikasi adanya potensi peningkatan cuaca ekstrem dalam sepekan ke depan yang berpotensi berdampak terhadap aktivitas masyarakat di sejumlah wilayah.")
-
-cause_parts = []
-cause_parts.append(f"Fenomena ini dipengaruhi oleh MJO (fase {mjo_phase}, amplitudo {mjo_amp}).")
+intro = (
+    f"Hampir seluruh wilayah Jawa Timur telah memasuki musim hujan. "
+    f"Terindikasi adanya potensi peningkatan cuaca ekstrem pada periode {periode} "
+    "yang berpotensi berdampak pada aktivitas masyarakat."
+)
+cause_parts = [
+    f"Fenomena ini dipengaruhi oleh MJO fase {mjo_phase} (amplitudo {mjo_amp}).",
+]
 if kelvin_active:
-    cause_parts.append("Masih terdapat gelombang atmosfer Kelvin yang melintas di wilayah selatan Jawa.")
+    cause_parts.append("Gelombang atmosfer Kelvin aktif melintasi wilayah selatan Jawa.")
 if olr_text:
-    cause_parts.append(f"Analisis OLR menunjukkan kondisi: {olr_text}.")
+    cause_parts.append(f"Analisis OLR menunjukkan kondisi {olr_text}.")
 if sst_text:
     cause_parts.append(sst_text)
 if ecmwf_desc:
-    cause_parts.append(f"Selain itu data model (ECMWF/Open-Meteo) menunjukkan: {ecmwf_desc}")
-
+    cause_parts.append(f"Berdasarkan data ECMWF/Open-Meteo, kondisi atmosfer menunjukkan {ecmwf_desc}.")
 cause_text = " ".join(cause_parts)
 
+# Ringkasan wilayah
 high_list = df[df["kategori"] == "Tinggi"]["wilayah"].tolist()
 med_list = df[df["kategori"] == "Sedang"]["wilayah"].tolist()
 low_list = df[df["kategori"] == "Rendah"]["wilayah"].tolist()
 
-def list_to_text(lst):
+def join_list(lst):
     return ", ".join(lst) if lst else "-"
 
 blocks_text = (
-    f"Wilayah dengan potensi TINGGI (≥ {high_thr}%): {list_to_text(high_list)}\n\n"
-    f"Wilayah dengan potensi SEDANG (≥ {low_thr}% — < {high_thr}%): {list_to_text(med_list)}\n\n"
-    f"Wilayah dengan potensi RENDAH (< {low_thr}%): {list_to_text(low_list)}"
+    f"Wilayah dengan potensi **TINGGI (≥{high_thr}%)**: {join_list(high_list)}.\n\n"
+    f"Wilayah dengan potensi **SEDANG ({low_thr}–{high_thr}%)**: {join_list(med_list)}.\n\n"
+    f"Wilayah dengan potensi **RENDAH (<{low_thr}%)**: {join_list(low_list)}."
 )
 
-advice = ("BMKG Juanda menghimbau masyarakat dan instansi terkait untuk tetap waspada terhadap potensi hujan sedang hingga lebat "
-          "yang dapat disertai petir dan angin kencang. Daerah bergunung/curam diimbau meningkatkan kewaspadaan terhadap banjir bandang dan longsor. "
-          "Pantau selalu informasi peringatan dini melalui saluran resmi BMKG Juanda.")
+advice = (
+    "BMKG Juanda menghimbau masyarakat untuk tetap waspada terhadap potensi hujan lebat "
+    "disertai petir dan angin kencang. Wilayah pegunungan dan rawan longsor agar "
+    "meningkatkan kewaspadaan terhadap bencana hidrometeorologi. "
+    "Pantau terus informasi resmi dari BMKG Juanda."
+)
 
-release = f"""PRESS RELEASE KEWASPADAAN CUACA EKSTREM DI JAWA TIMUR
-Periode: {periode}
+release = f"""
+PRESS RELEASE KEWASPADAAN CUACA EKSTREM DI JAWA TIMUR
 Nomor: {nomor}
-Tanggal keluaran: {tanggal}
+Periode: {periode}
+Tanggal Keluaran: {tanggal}
 
 {intro}
 
@@ -199,31 +214,12 @@ Tanggal keluaran: {tanggal}
 
 {advice}
 
-Demikian informasi kewaspadaan cuaca ekstrem di wilayah Jawa Timur hasil analisis TAFFWARR Fusion.
-BMKG Juanda
+BMKG Stasiun Meteorologi Juanda
 """
 
-st.code(textwrap.dedent(release), language="text")
+st.code(textwrap.dedent(release), language="markdown")
 
-# --- Download buttons ---
-st.markdown("### ⬇️ Unduh")
-st.download_button("Unduh press release (.txt)", release.encode("utf-8"), file_name=f"press_release_jatim_{tanggal}.txt", mime="text/plain")
-st.download_button("Unduh ringkasan wilayah (.csv)", df.to_csv(index=False).encode("utf-8"), file_name=f"probabilitas_jatim_{tanggal}.csv", mime="text/csv")
+st.download_button("⬇️ Unduh Press Release (.txt)", release.encode("utf-8"), file_name=f"press_release_jatim_{tanggal}.txt", mime="text/plain")
+st.download_button("⬇️ Unduh Data (.csv)", df.to_csv(index=False).encode("utf-8"), file_name=f"probabilitas_jatim_{tanggal}.csv", mime="text/csv")
 
-# optional: show per-wilayah short block
-st.markdown("---")
-st.subheader("Blok per kabupaten/kota (copyable)")
-for _, r in df.iterrows():
-    reasons = []
-    if "MJO" in atmo or "phase" in atmo:
-        reasons.append(f"MJO fase {mjo_phase}")
-    if kelvin_active:
-        reasons.append("Kelvin wave")
-    if "sst_desc" in atmo:
-        reasons.append(atmo.get("sst_desc"))
-    # include ECMWF short
-    reasons.append(ecmwf.get("desc", ""))
-    reason_text = "; ".join([x for x in reasons if x])
-    st.code(f"{r['wilayah']} — Prob: {r['probabilitas']:.1f}% (Kategori: {r['kategori']}). Penyebab: {reason_text}")
-
-st.success("Selesai. Tekan tombol unduh untuk menyimpan keluaran.")
+st.success("✅ Selesai — press release dan visualisasi siap digunakan.")
