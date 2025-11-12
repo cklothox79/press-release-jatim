@@ -127,7 +127,7 @@ with col2:
     st.markdown("---")
     st.subheader("🗺️ Peta Potensi Cuaca Ekstrem (Choropleth)")
 
-    geojson_url = "https://raw.githubusercontent.com/superpikar/jatim-geojson/main/jatim_kabkota.geojson"
+    geojson_url = "https://raw.githubusercontent.com/superpikar/indonesia-geojson/main/jawa_timur.geojson"
     try:
         gdf = gpd.read_file(geojson_url)
         merged = gdf.merge(df, left_on="WADMKC", right_on="wilayah", how="left")
