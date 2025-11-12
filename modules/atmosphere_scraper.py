@@ -41,7 +41,7 @@ def fetch_kelvin_activity():
     Returns: {'kelvin_active': bool, 'source': url} or error.
     """
     try:
-        url = "https://www.cpc.ncep.noaa.gov/products/precip/CWlink/daily_olr/Kelvin_wave.shtml"
+        url = "https://www.cpc.ncep.noaa.gov/products/precip/CWlink/daily_olr/Kelvin_wave_anim.shtml"
         r = requests.get(url, timeout=12)
         r.raise_for_status()
         text = r.text.lower()
